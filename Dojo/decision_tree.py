@@ -26,48 +26,64 @@ class MyTreeReg:
         self,
         max_depth=5,
         min_samples_split=2,
-        max_leafs=20
+        max_leafs=20,
+        bins=None
     ):
         self.max_depth = max_depth
         self.min_samples_split = min_samples_split
         self.max_leafs = max_leafs
         self.leafs_cnt = 1
         self.tree = None
-        self.__sum_tree_values = 0
+        self.bins = bins
+        self.col_thresholds = {}
+        self.fi = {}
 
     def __repr__(self):
         atts = ', '.join(f'{k}={v}' for k, v in vars(self).items())
         return f'MyTreeReg class: {atts}'
 
     def get_best_split(self, X: pd.DataFrame, y: pd.Series):
-        col_splits = {}
         mse_0 = np.var(y)
+        col_split_gain = {}
 
         for col in X.columns:
-            vals = np.sort(X[col].unique())
-            splits = []
-            thresholds = (vals[1:] + vals[:-1]) / 2
+            if col not in self.col_thresholds.keys():
+                vals = np.sort(X[col].unique())
+                if self.bins is None or len(vals) <= self.bins - 1:
+                    self.col_thresholds[col] = (vals[1:] + vals[:-1]) / 2
+                else:
+                    self.col_thresholds[col] = np.histogram(
+                        X[col], bins=self.bins
+                        )[1]
 
-            for t in thresholds:
+            splits = []
+            for t in self.col_thresholds[col]:
                 y_left = y[X[col] <= t]
                 y_right = y[X[col] > t]
 
-                gain = (
-                    mse_0 - y_left.size/y.size * np.var(y_left)
-                    - y_right.size/y.size * np.var(y_right)
-                )
-                splits.append((t, gain))
+                if len(y_left) > 0 and len(y_right) > 0:
+                    gain = (
+                        mse_0 - y_left.size/y.size * np.var(y_left)
+                        - y_right.size/y.size * np.var(y_right)
+                    )
+                    splits.append((t, gain))
 
-            col_splits[col] = max(splits, key=lambda x: x[1])
+            if splits:
+                col_split_gain[col] = max(splits, key=lambda x: x[1])
+            else:
+                col_split_gain[col] = (None, -float('inf'))
 
-        col_name, (split_value, gain) = max(
-            col_splits.items(), key=lambda x: x[1][1]
+        if col_split_gain:
+            col_name, (split_value, gain) = max(
+                col_split_gain.items(), key=lambda x: x[1][1]
             )
-
-        return col_name, split_value, gain
+            return col_name, split_value, gain
+        else:
+            return None, None, -float('inf')
 
     def fit(self, X: pd.DataFrame, y: pd.Series):
         self.tree = None
+        self.fi = {col: 0 for col in X.columns}
 
         def _grow_tree(
             node,
@@ -100,6 +116,8 @@ class MyTreeReg:
                 node.value = y_node.mean()
                 node.side = side
                 return node
+
+            self.fi[col_name] += y_node.size/y.size * gain
 
             node.feature = col_name
             node.threshold = split_value
